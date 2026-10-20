@@ -2,6 +2,7 @@
 import { Command } from "commander";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { scanFolder } from "./scan.js";
 
 export const program = new Command();
 
@@ -9,6 +10,19 @@ program
   .name("sloth-tidy")
   .description("Safely organize a folder with a local model.")
   .version("0.1.0");
+
+program
+  .command("scan <folder>", { hidden: true })
+  .description("Print file cards for local verification.")
+  .action(async (folder: string) => {
+    const cards = await scanFolder(folder);
+    console.table(cards.map(({ name, ext, size, snippet }) => ({
+      name,
+      ext,
+      size,
+      snippet: snippet?.slice(0, 60) ?? "",
+    })));
+  });
 
 program
   .command("plan <folder>")
