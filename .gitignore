@@ -1,0 +1,19 @@
+# dependencies and build output
+node_modules/
+dist/
+
+# generated demo data (recreate with scripts/make-messy-folder.ts)
+demo/
+
+# Sloth Tidy runtime files
+.sloth-tidy/
+plan.json
+
+# secrets and local config
+.env
+.env.*
+
+# logs and OS junk
+*.log
+.DS_Store
+Thumbs.db
