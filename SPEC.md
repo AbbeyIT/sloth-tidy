@@ -52,20 +52,22 @@ Reverse the last applied batch from the undo log, newest move first. Remove dest
 
 ## 5. Model contract
 
-The model returns JSON only, validated with zod:
+The model returns JSON only, validated with zod. `category` must be one of `rules.folders`; when no list is supplied, use the built-in list Invoices, Receipts, Work, School, Installers, Images, Misc.
 
 ```ts
 const Decision = z.object({
-  newName: z.string().min(1).max(120),   // filename without folder, extension preserved
-  folder: z.string().min(1).max(80),     // relative folder, max 2 levels, e.g. "Invoices/2026"
-  reason: z.string().max(200),
+  category: z.enum(categories),
+  description: z.string(),              // 2-6 lowercase English words, letters/numbers/hyphens only
+  documentDate: z.string(),             // YYYY-MM-DD or "unknown"
+  reason: z.string().max(200),          // English
   confidence: z.number().min(0).max(1),
 });
 ```
 
+The model never supplies a path or filename. Code builds `folder` from the category, adding `/YYYY` for Invoices and Receipts only when a visible document date is known. Code builds `newName` as `<documentDate or file mtime date>_<description>.<original extension>`.
+
 Rules enforced **in code**, not just in the prompt:
-- Sanitize `newName` and `folder`: strip `..`, absolute paths, slashes in `newName`, control characters, and reserved characters. Preserve the original extension.
-- Reject any decision that fails validation. Retry once with the validation error appended, then fall back to "leave in place" with `reason: "model output invalid"`.
+- Reject non-English/non-ASCII letters in `reason` or `description`, and reject invalid categories, dates, or descriptions. Retry once with the validation error appended, then fall back to "leave in place" with `reason: "model output invalid"` and confidence 0.
 - If `confidence < 0.5`, leave the file in place and mark it `skipped`.
 - Resolve collisions by appending ` (2)`, ` (3)`, and so on. Never overwrite.
 - Prefer existing folders under the target root when the model's folder is a near match (case-insensitive).

@@ -1,5 +1,5 @@
 import { readdir, stat } from "node:fs/promises";
-import { resolve, join, extname } from "node:path";
+import { resolve, join, extname, basename } from "node:path";
 import { extractSnippet } from "./extract.js";
 
 export interface FileCard {
@@ -15,6 +15,29 @@ export interface ScanOptions {
   limit?: number;
 }
 
+async function createCard(filePath: string, name: string, size: number, mtimeMs: number): Promise<FileCard> {
+  const snippet = await extractSnippet(filePath);
+  return {
+    name,
+    ext: extname(name).slice(1).toLowerCase(),
+    size,
+    mtimeMs,
+    path: filePath,
+    ...(snippet === undefined ? {} : { snippet }),
+  };
+}
+
+/** Build one file card without reading any sibling files. */
+export async function scanFile(filePath: string): Promise<FileCard | undefined> {
+  const absolutePath = resolve(filePath);
+  const name = basename(absolutePath);
+  if (name.startsWith(".")) return undefined;
+
+  const fileStats = await stat(absolutePath);
+  if (!fileStats.isFile()) return undefined;
+  return createCard(absolutePath, name, fileStats.size, fileStats.mtimeMs);
+}
+
 /** Scan only regular files directly inside root, in deterministic name order. */
 export async function scanFolder(root: string, opts: ScanOptions = {}): Promise<FileCard[]> {
   const absoluteRoot = resolve(root);
@@ -28,16 +51,7 @@ export async function scanFolder(root: string, opts: ScanOptions = {}): Promise<
     limitedFiles.map(async (entry): Promise<FileCard> => {
       const filePath = join(absoluteRoot, entry.name);
       const fileStats = await stat(filePath);
-      const snippet = await extractSnippet(filePath);
-
-      return {
-        name: entry.name,
-        ext: extname(entry.name).slice(1).toLowerCase(),
-        size: fileStats.size,
-        mtimeMs: fileStats.mtimeMs,
-        path: filePath,
-        ...(snippet === undefined ? {} : { snippet }),
-      };
+      return createCard(filePath, entry.name, fileStats.size, fileStats.mtimeMs);
     }),
   );
 }

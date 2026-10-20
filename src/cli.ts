@@ -2,7 +2,8 @@
 import { Command } from "commander";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { scanFolder } from "./scan.js";
+import { decideForFile } from "./llm.js";
+import { scanFile, scanFolder } from "./scan.js";
 
 export const program = new Command();
 
@@ -22,6 +23,18 @@ program
       size,
       snippet: snippet?.slice(0, 60) ?? "",
     })));
+  });
+
+program
+  .command("decide <file>", { hidden: true })
+  .description("Print one local model decision for verification.")
+  .option("--allow-remote", "allow a non-local Ollama URL from SLOTH_OLLAMA_URL")
+  .action(async (file: string, options: { allowRemote?: boolean }) => {
+    const card = await scanFile(file);
+    if (!card) throw new Error(`Could not scan file: ${file}`);
+
+    const decision = await decideForFile(card, undefined, { allowRemote: options.allowRemote });
+    console.log(JSON.stringify(decision, null, 2));
   });
 
 program

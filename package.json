@@ -17,7 +17,8 @@
   "dependencies": {
     "commander": "^13.1.0",
     "mammoth": "^1.9.0",
-    "pdf-parse": "^2.4.5"
+    "pdf-parse": "^2.4.5",
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@types/node": "^22.20.5",
