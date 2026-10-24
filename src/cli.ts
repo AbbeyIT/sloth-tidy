@@ -18,10 +18,11 @@ program
   .description("Print file cards for local verification.")
   .action(async (folder: string) => {
     const cards = await scanFolder(folder);
-    console.table(cards.map(({ name, ext, size, snippet }) => ({
+    console.table(cards.map(({ name, ext, size, mtimeMs, snippet }) => ({
       name,
       ext,
       size,
+      modified: new Date(mtimeMs).toISOString(),
       snippet: snippet?.slice(0, 60) ?? "",
     })));
   });
@@ -43,12 +44,13 @@ program
   .option("--out <file>", "plan output file", "plan.json")
   .option("--limit <number>", "maximum files to consider", (value) => Number.parseInt(value, 10))
   .action(async (folder: string, options: { out: string; limit?: number }) => {
-    const { plan, elapsedMs } = await createPlan(folder, {
+    const { plan, elapsedMs, modelCalls, extensionOnlyDecisions, replacedExistingPlan } = await createPlan(folder, {
       out: options.out,
       limit: options.limit,
       onProgress: (index, total, name) => console.log(`[${index}/${total}] ${name}`),
     });
-    printPlanSummary(plan.items, elapsedMs);
+    if (replacedExistingPlan) console.log("replacing previous plan");
+    printPlanSummary(plan.items, elapsedMs, modelCalls, extensionOnlyDecisions);
   });
 
 program

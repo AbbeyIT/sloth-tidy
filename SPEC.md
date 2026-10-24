@@ -52,7 +52,7 @@ Reverse the last applied batch from the undo log, newest move first. Remove dest
 
 ## 5. Model contract
 
-The model returns JSON only, validated with zod. `category` must be one of `rules.folders`; when no list is supplied, use the built-in list Invoices, Receipts, Work, School, Installers, Images, Misc.
+The model returns JSON only, validated with zod. `category` must be one of `rules.folders`; when no list is supplied, use the built-in list Invoices, Receipts, Work, School, Installers, Images, Personal, Misc.
 
 ```ts
 const Decision = z.object({
@@ -64,12 +64,13 @@ const Decision = z.object({
 });
 ```
 
-The model never supplies a path or filename. Code builds `folder` from the category, adding `/YYYY` for Invoices and Receipts only when a visible document date is known. Code builds `newName` as `<documentDate or file mtime date>_<description>.<original extension>`.
+The model never supplies a path or filename. Code builds `folder` from the category, always adding `/YYYY` for Invoices and Receipts using the verified document date or, when unknown, the file modified date. Code builds `newName` as `<documentDate or file mtime date>_<description>.<original extension>`.
 
 Rules enforced **in code**, not just in the prompt:
 - Reject non-English/non-ASCII letters in `reason` or `description`, and reject invalid categories, dates, or descriptions. Retry once with the validation error appended, then fall back to "leave in place" with `reason: "model output invalid"` and confidence 0.
 - If `confidence < 0.5`, leave the file in place and mark it `skipped`.
 - Resolve collisions by appending ` (2)`, ` (3)`, and so on. Never overwrite.
+- Skipped plan items use `to: "-"` and stay at their original location.
 - Prefer existing folders under the target root when the model's folder is a near match (case-insensitive).
 
 ## 6. `rules.yaml` (user steering)

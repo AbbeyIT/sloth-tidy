@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { buildDecision, cleanDescription, extensionDecision, hasVisibleDate, isPreferredDocumentDate, resolveCollisions } from "../src/decide.js";
+import { buildDecision, cleanDescription, decisionJsonSchema, DEFAULT_CATEGORIES, extensionDecision, hasVisibleDate, isPreferredDocumentDate, resolveCollisions } from "../src/decide.js";
 import { decideForFile } from "../src/llm.js";
 import type { FileCard } from "../src/scan.js";
 
@@ -35,6 +35,8 @@ describe("decideForFile", () => {
     expect(request).toMatchObject({ model: "qwen2.5:7b", stream: false, options: { temperature: 0 } });
     expect(request.messages[0].content).toContain("Write all text in English only");
     expect(request.messages[0].content).toContain("vscode-windows-installer");
+    expect(request.messages[0].content).toContain("monthly-household-budget");
+    expect(request.messages[0].content).toContain("vendor documents showing an amount charged or paid");
     expect(request.messages[1].content).toContain("modified date");
   });
 
@@ -131,8 +133,22 @@ describe("decision polish", () => {
   it("removes month names and years from descriptions before naming", () => {
     expect(cleanDescription("october-2026-school-notes-2026-2027-final")).toBe("school-notes-final");
     expect(cleanDescription("sep-2027-client-update")).toBe("client-update");
+    expect(cleanDescription("receipt-pharmacy-08")).toBe("receipt-pharmacy");
+    expect(cleanDescription("invoice-2026-10-acme-office")).toBe("invoice-acme-office");
     const decision = buildDecision({ category: "School", description: "october-2026-school-notes", documentDate: "unknown", reason: "School notes", confidence: 0.9 }, card);
     expect(decision.newName).toBe("2026-10-20_school-notes.pdf");
+  });
+
+  it("adds an effective-date year to Invoices and Receipts even when using file mtime", () => {
+    for (const category of ["Invoices", "Receipts"]) {
+      const decision = buildDecision({ category, description: "monthly-vendor-bill", documentDate: "unknown", reason: "Vendor bill", confidence: 0.9 }, card);
+      expect(decision.folder).toBe(`${category}/2026`);
+    }
+  });
+
+  it("includes Personal in the default category schema", () => {
+    expect(DEFAULT_CATEGORIES).toContain("Personal");
+    expect(decisionJsonSchema([]).properties.category.enum).toContain("Personal");
   });
 
   it.each([

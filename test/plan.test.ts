@@ -61,6 +61,7 @@ describe("createPlan", () => {
     });
     const { plan } = await createPlan(root);
     expect(plan.items.map((item) => item.status)).toEqual(["skipped", "skipped", "skipped"]);
+    expect(plan.items.map((item) => item.to)).toEqual(["-", "-", "-"]);
   });
 
   it("leaves the source folder byte-for-byte unchanged", async () => {
@@ -76,5 +77,16 @@ describe("createPlan", () => {
       expect(await readFile(join(root, name))).toEqual(bytes);
       expect((await stat(join(root, name))).mtimeMs).toBe(mtimes.get(name));
     }
+  });
+
+  it("atomically replaces an existing plan output", async () => {
+    const root = await makeFolder(["one.txt"]);
+    const out = join(temporary, "plan.json");
+    await writeFile(out, "old plan");
+    decideMock.mockResolvedValue(suggestion("new-name.txt"));
+    const { plan, replacedExistingPlan } = await createPlan(root, { out });
+    expect(replacedExistingPlan).toBe(true);
+    expect(JSON.parse(await readFile(out, "utf8"))).toEqual(plan);
+    expect((await readdir(temporary)).filter((name) => name.endsWith(".tmp"))).toEqual([]);
   });
 });

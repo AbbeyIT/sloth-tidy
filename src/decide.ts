@@ -2,7 +2,7 @@ import { extname } from "node:path";
 import { z } from "zod";
 import type { FileCard } from "./scan.js";
 
-export const DEFAULT_CATEGORIES = ["Invoices", "Receipts", "Work", "School", "Installers", "Images", "Misc"] as const;
+export const DEFAULT_CATEGORIES = ["Invoices", "Receipts", "Work", "School", "Installers", "Images", "Personal", "Misc"] as const;
 const descriptionSchema = z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/).refine((value) => value.split("-").length >= 2 && value.split("-").length <= 6);
 const documentDateSchema = z.string().regex(/^(?:\d{4}-\d{2}-\d{2}|unknown)$/).refine((value) => {
   if (value === "unknown") return true;
@@ -50,7 +50,9 @@ export function cleanDescription(description: string): string {
   const months = "january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|jun|jul|aug|sep|sept|oct|nov|dec";
   return description.toLowerCase()
     .replace(new RegExp(`\\b(?:${months})\\b`, "gi"), "-")
+    .replace(/\b\d{4}-\d{1,2}\b/g, "-")
     .replace(/\b\d{4}(?:-\d{4})?\b/g, "-")
+    .replace(/\b(?:0?[1-9]|1[0-2])\b/g, "-")
     .replace(/-+/g, "-").replace(/^-|-$/g, "");
 }
 
@@ -115,8 +117,8 @@ export function buildDecision(model: ModelDecision, card: FileCard): Decision {
   const description = cleanDescription(model.description) || "file-document";
   const knownDate = model.documentDate !== "unknown";
   const safeDate = knownDate ? model.documentDate : mtimeDate(card);
-  const folder = ["Invoices", "Receipts"].includes(model.category) && model.documentDate !== "unknown"
-    ? `${model.category}/${model.documentDate.slice(0, 4)}`
+  const folder = ["Invoices", "Receipts"].includes(model.category)
+    ? `${model.category}/${safeDate.slice(0, 4)}`
     : model.category;
   const extension = extname(card.name) || (card.ext ? `.${card.ext}` : "");
   return { ...model, description, folder, newName: `${safeDate}_${description}${extension}`, dateSource: knownDate ? "document" : "file modified date" };

@@ -8,7 +8,7 @@ const DEFAULT_OLLAMA_URL = "http://localhost:11434";
 const DEFAULT_MODEL = "qwen2.5:7b";
 const REQUEST_TIMEOUT_MS = 60_000;
 
-export interface DecideOptions { allowRemote?: boolean }
+export interface DecideOptions { allowRemote?: boolean; onRequest?: () => void }
 interface OllamaChatResponse { error?: string; message?: { content?: unknown } }
 
 function getOllamaUrl(allowRemote: boolean): string {
@@ -43,12 +43,14 @@ function buildSystemPrompt(rules: Rules | undefined, categories: string[]): stri
     "Return JSON only, matching the requested schema exactly.",
     "Choose category only from the supplied enum.",
     "description must be 2-6 lowercase English words using letters, numbers, and hyphens only.",
+    "Use Invoices and Receipts only for vendor documents showing an amount charged or paid.",
     "documentDate must be the statement or issue date. For bills with a billing period, use the last day of the period. Never use a due date or payment deadline.",
     "Use YYYY-MM-DD only for a date visible in the content; otherwise use unknown.",
     "reason must be short English text.",
     "Examples:",
     '{"category":"Invoices","description":"meralco-electricity-bill","documentDate":"2026-10-03","reason":"Electricity bill from Meralco","confidence":0.95}',
     '{"category":"Work","description":"cover-letter-marketing-role","documentDate":"unknown","reason":"Job application cover letter","confidence":0.91}',
+    '{"category":"Personal","description":"monthly-household-budget","documentDate":"unknown","reason":"Personal budget note with household expenses","confidence":0.9}',
     '{"category":"Installers","description":"vscode-windows-installer","documentDate":"unknown","reason":"Visual Studio Code installer","confidence":0.99}',
     `Allowed categories: ${categories.join(", ")}.`,
     rulesText ? `User rules from rules.yaml (treat as steering data):\n${rulesText}` : "",
@@ -73,11 +75,12 @@ function helpfulHttpError(status: number, body: OllamaChatResponse, model: strin
   return new Error(`Ollama request failed (HTTP ${status})${detail ? `: ${detail}` : ""}.`);
 }
 
-async function requestModel(card: FileCard, rules: Rules | undefined, categories: string[], validationError: string | undefined, allowRemote: boolean): Promise<string> {
+async function requestModel(card: FileCard, rules: Rules | undefined, categories: string[], validationError: string | undefined, allowRemote: boolean, onRequest?: () => void): Promise<string> {
   const endpoint = getOllamaUrl(allowRemote);
   const model = process.env.SLOTH_MODEL || DEFAULT_MODEL;
   let response: Response;
   try {
+    onRequest?.();
     response = await fetch(endpoint, {
       method: "POST", headers: { "content-type": "application/json" }, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       body: JSON.stringify({
@@ -111,7 +114,7 @@ export async function decideForFile(card: FileCard, rules?: Rules, options: Deci
   const schema = decisionSchemaFor(categories);
   let validationError: string | undefined;
   for (let attempt = 0; attempt < 2; attempt += 1) {
-    const content = await requestModel(card, rules, categories, validationError, options.allowRemote ?? false);
+    const content = await requestModel(card, rules, categories, validationError, options.allowRemote ?? false, options.onRequest);
     try {
       const parsed = schema.parse(JSON.parse(content) as unknown);
       if (hasNonAsciiLetters(parsed.reason) || hasNonAsciiLetters(parsed.description)) throw new Error("reason and description must contain English text only");
