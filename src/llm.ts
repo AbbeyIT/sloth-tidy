@@ -136,12 +136,12 @@ export async function decideForFile(card: FileCard, rules?: Rules, options: Deci
       const parsed = schema.parse(JSON.parse(content) as unknown);
       if (hasNonAsciiLetters(parsed.reason) || hasNonAsciiLetters(parsed.description)) throw new Error("reason and description must contain English text only");
       if (!cleanDescription(parsed.description)) throw new Error("description empty after cleanup");
-      if (!hasVisibleDate(parsed.documentDate, card)) throw new Error("documentDate is not visible in the filename or extracted content; use unknown");
-      if (parsed.documentDate !== "unknown" && /\bdue\s+date\b|\bpayment\s+(?:deadline|due)\b/i.test(card.snippet ?? "")) {
-        const preferred = isPreferredDocumentDate(parsed.documentDate, card);
+      const verifiedDate = hasVisibleDate(parsed.documentDate, card) ? parsed.documentDate : "unknown";
+      if (verifiedDate !== "unknown" && /\bdue\s+date\b|\bpayment\s+(?:deadline|due)\b/i.test(card.snippet ?? "")) {
+        const preferred = isPreferredDocumentDate(verifiedDate, card);
         if (!preferred) console.warn(`Model selected ${parsed.documentDate}, which appears to be a due date or payment deadline; a statement or issue date is preferred.`);
       }
-      return leaveInPlace(buildDecision(parsed, card), card);
+      return leaveInPlace(buildDecision({ ...parsed, documentDate: verifiedDate }, card), card);
     } catch (error) { validationError = validationMessage(error); }
   }
   return fallbackDecision(card, validationError ?? "response did not match the Decision schema");

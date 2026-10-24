@@ -9,7 +9,7 @@
 - [x] Apply
 - [x] Undo
 - [x] rules.yaml
-- [ ] Watch
+- [x] Watch
 
 ## Why local and open
 

@@ -77,6 +77,15 @@ function destinationRelative(itemTo: string): string {
 /** Validate everything in a plan before performing its first move. */
 export async function applyPlan(planPath: string, options: ApplyOptions = {}): Promise<ApplyResult | undefined> {
   const parsed = planSchema.parse(JSON.parse(await readFile(planPath, "utf8")));
+  return applyPlanDataInternal(parsed, planPath, options);
+}
+
+/** Apply a validated in-memory batch through the identical checks and undo log. */
+export async function applyPlanData(data: unknown, options: ApplyOptions = {}): Promise<ApplyResult | undefined> {
+  return applyPlanDataInternal(planSchema.parse(data), undefined, options);
+}
+
+async function applyPlanDataInternal(parsed: ApplyPlan, planPath: string | undefined, options: ApplyOptions): Promise<ApplyResult | undefined> {
   const root = resolve(parsed.root);
   const realRoot = await realpath(root);
   const plan: ApplyPlan = { ...parsed, root };
@@ -185,7 +194,7 @@ export async function applyPlan(planPath: string, options: ApplyOptions = {}): P
   const log = await loadUndoLog(logPath);
   log.push({ batchId, appliedAt: new Date().toISOString(), moves, createdDirs, undone: false });
   await writeJsonSafely(logPath, log);
-  await writeJsonSafely(resolve(planPath), plan);
+  if (planPath) await writeJsonSafely(resolve(planPath), plan);
   console.log(`Applied: ${moves.length}  Skipped: ${skipped}  Failed: ${failures.length}`);
   for (const failure of failures) console.error(`Failed ${failure.from} -> ${failure.to}: ${failure.error}`);
   return { plan, applied: moves.length, skipped, failed: failures, batchId };

@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { performance } from "node:perf_hooks";
 import { extensionDecision, resolveCollisions } from "./decide.js";
+import type { Decision } from "./decide.js";
 import { decideForFile } from "./llm.js";
 import { scanFolder, type FileCard } from "./scan.js";
 import { categoriesFromRules, matchingNeverTouch, matchingOverride } from "./rules.js";
@@ -15,19 +16,21 @@ export interface PlanItem {
   to: string;
   reason: string;
   confidence: number;
-  status: "planned" | "skipped";
+  status: "planned" | "skipped" | "applied" | "failed";
 }
 
 export interface PlanFile { version: 1; root: string; model: string; createdAt: string; items: PlanItem[] }
 
 export interface CreatePlanOptions { limit?: number; rules?: Rules; allowRemote?: boolean; out?: string; onProgress?: (index: number, total: number, name: string) => void }
+export type PlanDecisionKind = "model" | "override" | "extension" | "never-touch" | "timeout";
+export interface PlanDecisionOptions { allowRemote?: boolean; onRequest?: () => void }
 
 function sameDestinationName(item: PlanItem): boolean {
   return item.to.replace(/\\/g, "/").split("/").at(-1)?.toLocaleLowerCase("en-US") === item.from.toLocaleLowerCase("en-US")
     && !item.to.includes("/");
 }
 
-async function existingRelativePaths(root: string): Promise<string[]> {
+export async function existingRelativePaths(root: string): Promise<string[]> {
   const found: string[] = [];
   async function visit(directory: string, prefix = ""): Promise<void> {
     for (const entry of await readdir(directory, { withFileTypes: true })) {
@@ -63,49 +66,52 @@ function isModelTimeout(error: unknown): boolean {
   return error instanceof Error && ["ModelTimeoutError", "TimeoutError", "AbortError"].includes(error.name);
 }
 
+export async function decideCardForPlan(card: FileCard, rules?: Rules, options: PlanDecisionOptions = {}): Promise<{ decision: Decision; kind: PlanDecisionKind }> {
+  const protectedByRule = matchingNeverTouch(card.name, rules);
+  if (protectedByRule) return { decision: ruleSkipDecision(card, protectedByRule), kind: "never-touch" };
+  const override = matchingOverride(card.name, rules);
+  if (override) return { decision: overrideDecision(card, override.category, override.match), kind: "override" };
+  if (!card.snippet?.trim()) return { decision: extensionDecision(card, categoriesFromRules(rules)), kind: "extension" };
+
+  try { return { decision: await decideForFile(card, rules, options), kind: "model" }; }
+  catch (error) {
+    if (!isModelTimeout(error)) throw error;
+    try { return { decision: await decideForFile(card, rules, options), kind: "model" }; }
+    catch (retryError) {
+      if (!isModelTimeout(retryError)) throw retryError;
+      return { decision: timeoutDecision(card), kind: "timeout" };
+    }
+  }
+}
+
+/** Build one plan row with the same skip and collision behavior as createPlan. */
+export function planItemForDecision(card: FileCard, decision: Decision, occupiedTargets: string[] = []): PlanItem {
+  const folder = decision.folder === "." ? "" : decision.folder;
+  const skipped = decision.confidence < 0.5 || isTemporary(card.name) || (decision.folder === "." && decision.newName === card.name);
+  if (skipped) return { from: card.name, fromSize: card.size, fromMtime: card.mtimeMs, to: "-", reason: decision.reason, confidence: decision.confidence, status: "skipped" };
+  const target = resolveCollisions([{ folder: folder || ".", newName: decision.newName }], occupiedTargets)[0]!;
+  const to = target.folder === "." ? target.newName : join(target.folder, target.newName).split(sep).join("/");
+  return { from: card.name, fromSize: card.size, fromMtime: card.mtimeMs, to, reason: decision.reason, confidence: decision.confidence, status: "planned" };
+}
+
 export async function createPlan(rootPath: string, options: CreatePlanOptions = {}): Promise<{ plan: PlanFile; elapsedMs: number; modelCalls: number; overrideDecisions: number; extensionOnlyDecisions: number; neverTouchSkips: number; replacedExistingPlan: boolean; dateSources: Record<string, string> }> {
   const started = performance.now();
   const root = resolve(rootPath);
   const cards = await scanFolder(root, { limit: options.limit, exclude: ["rules.yaml"] });
   const existing = await existingRelativePaths(root);
-  const decisions = [] as Array<{ card: FileCard; decision: Awaited<ReturnType<typeof decideForFile>>; kind: "model" | "override" | "extension" | "never-touch" | "timeout" }>;
+  const decisions = [] as Array<{ card: FileCard; decision: Decision; kind: PlanDecisionKind }>;
   let modelCalls = 0;
   let overrideDecisions = 0;
   let neverTouchSkips = 0;
-  const categories = categoriesFromRules(options.rules);
-
   for (let i = 0; i < cards.length; i += 1) {
     const card = cards[i]!;
     options.onProgress?.(i + 1, cards.length, card.name);
-    const protectedByRule = matchingNeverTouch(card.name, options.rules);
-    if (protectedByRule) {
-      decisions.push({ card, decision: ruleSkipDecision(card, protectedByRule), kind: "never-touch" });
-      neverTouchSkips += 1;
-      continue;
-    }
-    const override = matchingOverride(card.name, options.rules);
-    if (override) {
-      decisions.push({ card, decision: overrideDecision(card, override.category, override.match), kind: "override" });
-      overrideDecisions += 1;
-      continue;
-    }
-    if (!card.snippet?.trim()) {
-      decisions.push({ card, decision: extensionDecision(card, categories), kind: "extension" });
-      continue;
-    }
-    const decideOptions = { allowRemote: options.allowRemote, onRequest: () => { modelCalls += 1; } };
-    let decision: Awaited<ReturnType<typeof decideForFile>>;
-    try { decision = await decideForFile(card, options.rules, decideOptions); }
-    catch (error) {
-      if (!isModelTimeout(error)) throw error;
-      try { decision = await decideForFile(card, options.rules, decideOptions); }
-      catch (retryError) {
-        if (!isModelTimeout(retryError)) throw retryError;
-        decisions.push({ card, decision: timeoutDecision(card), kind: "timeout" });
-        continue;
-      }
-    }
-    decisions.push({ card, decision, kind: "model" });
+    const { decision, kind } = await decideCardForPlan(card, options.rules, {
+      allowRemote: options.allowRemote, onRequest: () => { modelCalls += 1; },
+    });
+    decisions.push({ card, decision, kind });
+    if (kind === "override") overrideDecisions += 1;
+    if (kind === "never-touch") neverTouchSkips += 1;
   }
 
   const candidates = decisions.map(({ card, decision }) => {

@@ -90,10 +90,13 @@ describe("decideForFile", () => {
     expect(result.newName).toBe("2026-10-20_meeting-notes.pdf");
   });
 
-  it("retries dates that are not visible in source content", async () => {
-    const fetchMock = mockOllamaContent(answer({ documentDate: "2026-10-04" }), answer({ documentDate: "unknown" }));
-    await expect(decideForFile(card)).resolves.toMatchObject({ newName: "2026-10-20_meralco-electricity-bill.pdf" });
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+  it("falls back to file mtime for a model date absent from the filename and text", async () => {
+    const fetchMock = mockOllamaContent(answer({ documentDate: "2026-10-04" }));
+    await expect(decideForFile(card)).resolves.toMatchObject({
+      documentDate: "unknown", dateSource: "file modified date", folder: "Invoices/2026",
+      newName: "2026-10-20_meralco-electricity-bill.pdf", confidence: 0.94,
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it("keeps low-confidence files in place", async () => {
@@ -176,9 +179,17 @@ describe("decision polish", () => {
     expect(cleanDescription("october-2026-school-notes-2026-2027-final")).toBe("school-notes-final");
     expect(cleanDescription("sep-2027-client-update")).toBe("client-update");
     expect(cleanDescription("receipt-pharmacy-08")).toBe("receipt-pharmacy");
+    expect(cleanDescription("pharmacy-receipt-22")).toBe("pharmacy-receipt");
     expect(cleanDescription("invoice-2026-10-acme-office")).toBe("invoice-acme-office");
     const decision = buildDecision({ category: "School", description: "october-2026-school-notes", documentDate: "unknown", reason: "School notes", confidence: 0.9 }, card);
     expect(decision.newName).toBe("2026-10-20_school-notes.pdf");
+  });
+
+  it("removes a redundant leading invoice or receipt word for its category", () => {
+    const receipt = buildDecision({ category: "Receipts", description: "receipt-pharmacy-receipt-22", documentDate: "unknown", reason: "Pharmacy receipt", confidence: 0.9 }, card);
+    const invoice = buildDecision({ category: "Invoices", description: "invoice-meralco-statement", documentDate: "unknown", reason: "Electricity invoice", confidence: 0.9 }, card);
+    expect(receipt.newName).toBe("2026-10-20_pharmacy-receipt.pdf");
+    expect(invoice.newName).toBe("2026-10-20_meralco-statement.pdf");
   });
 
   it("adds an effective-date year to Invoices and Receipts even when using file mtime", () => {

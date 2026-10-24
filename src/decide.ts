@@ -53,6 +53,7 @@ export function cleanDescription(description: string): string {
     .replace(/\b\d{4}-\d{1,2}\b/g, "-")
     .replace(/\b\d{4}(?:-\d{4})?\b/g, "-")
     .replace(/\b(?:0?[1-9]|1[0-2])\b/g, "-")
+    .replace(/-\d{1,2}$/g, "")
     .replace(/-+/g, "-").replace(/^-|-$/g, "");
 }
 
@@ -115,7 +116,10 @@ function mtimeDate(card: FileCard): string {
 
 /** Ignore all model-supplied paths and names; derive destinations from validated data. */
 export function buildDecision(model: ModelDecision, card: FileCard): Decision {
-  const description = cleanDescription(model.description) || "file-document";
+  let description = cleanDescription(model.description);
+  if (model.category === "Receipts") description = description.replace(/^receipt-/, "");
+  if (model.category === "Invoices") description = description.replace(/^invoice-/, "");
+  description ||= "file-document";
   const knownDate = model.documentDate !== "unknown";
   const safeDate = knownDate ? model.documentDate : mtimeDate(card);
   const folder = ["Invoices", "Receipts"].includes(model.category)
