@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildDecision, cleanDescription, decisionJsonSchema, DEFAULT_CATEGORIES, extensionDecision, hasVisibleDate, isPreferredDocumentDate, resolveCollisions } from "../src/decide.js";
-import { decideForFile } from "../src/llm.js";
+import { decideForFile, requestTimeoutMs } from "../src/llm.js";
 import type { FileCard } from "../src/scan.js";
 
 const card: FileCard = {
@@ -23,6 +23,15 @@ function mockOllamaContent(...contents: string[]) {
 afterEach(() => { vi.unstubAllGlobals(); vi.unstubAllEnvs(); });
 
 describe("decideForFile", () => {
+  it("uses SLOTH_TIMEOUT_MS with a 120 second default", () => {
+    vi.stubEnv("SLOTH_TIMEOUT_MS", "");
+    expect(requestTimeoutMs()).toBe(120_000);
+    vi.stubEnv("SLOTH_TIMEOUT_MS", "45000");
+    expect(requestTimeoutMs()).toBe(45_000);
+    vi.stubEnv("SLOTH_TIMEOUT_MS", "0");
+    expect(() => requestTimeoutMs()).toThrow(/positive integer/);
+  });
+
   it("accepts the new contract and sends an enum-constrained JSON schema", async () => {
     const fetchMock = mockOllamaContent(answer({ folder: "../../scan0012.pdf", newName: "invented.exe" }));
     const result = await decideForFile(card, { folders: ["Invoices", "School"] });

@@ -3,6 +3,7 @@ import { mkdtemp, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createPlan } from "../src/plan.js";
+import { validateRules } from "../src/rules.js";
 
 const decideMock = vi.hoisted(() => vi.fn());
 vi.mock("../src/llm.js", () => ({ decideForFile: decideMock }));
@@ -95,5 +96,45 @@ describe("createPlan", () => {
     expect(replacedExistingPlan).toBe(true);
     expect(JSON.parse(await readFile(out, "utf8"))).toEqual(plan);
     expect((await readdir(temporary)).filter((name) => name.endsWith(".tmp"))).toEqual([]);
+  });
+
+  it("rejects invalid rule categories and unsupported fields", () => {
+    expect(() => validateRules({ folders: ["Work"], overrides: [{ match: "*.docx", category: "School" }] })).toThrow(/category must be one of: Work/);
+    expect(() => validateRules({ unsupported: true })).toThrow(/Invalid rules\.yaml/);
+    expect(() => validateRules({ notes: "x".repeat(501) })).toThrow(/notes: Too big/);
+  });
+
+  it("applies overrides before the model and skips the model call", async () => {
+    const root = await makeFolder(["worksheet_fractions.docx"]);
+    const { plan } = await createPlan(root, { rules: validateRules({ overrides: [{ match: "worksheet*.docx", category: "School" }] }) });
+    expect(decideMock).not.toHaveBeenCalled();
+    expect(plan.items[0]).toMatchObject({ to: "School/worksheet_fractions.docx", status: "planned", reason: "matched override rule: worksheet*.docx" });
+  });
+
+  it("skips never_touch matches without calling the model", async () => {
+    const root = await makeFolder(["partial.part", "notes.txt"]);
+    decideMock.mockResolvedValue(suggestion("renamed.txt"));
+    const { plan } = await createPlan(root, { rules: validateRules({ never_touch: ["*.part"] }) });
+    expect(decideMock).toHaveBeenCalledTimes(1);
+    expect(plan.items[0]).toMatchObject({ from: "notes.txt", status: "planned" });
+    expect(plan.items[1]).toMatchObject({ from: "partial.part", to: "-", status: "skipped", reason: "matched never_touch rule: *.part" });
+  });
+
+  it("retries a timed-out file once, skips it after the retry, and plans following files", async () => {
+    const root = await makeFolder(["a-slow.txt", "b-fast.txt"]);
+    let slowAttempts = 0;
+    decideMock.mockImplementation(async (card: { name: string }, _rules: unknown, options: { onRequest?: () => void }) => {
+      options.onRequest?.();
+      if (card.name === "a-slow.txt") {
+        slowAttempts += 1;
+        throw Object.assign(new Error("timeout"), { name: "ModelTimeoutError" });
+      }
+      return suggestion("b-fast-renamed.txt");
+    });
+    const { plan, modelCalls } = await createPlan(root);
+    expect(slowAttempts).toBe(2);
+    expect(modelCalls).toBe(3);
+    expect(plan.items[0]).toMatchObject({ from: "a-slow.txt", to: "-", status: "skipped", reason: "model timeout" });
+    expect(plan.items[1]).toMatchObject({ from: "b-fast.txt", status: "planned" });
   });
 });

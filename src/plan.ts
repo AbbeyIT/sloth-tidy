@@ -2,9 +2,10 @@ import { access, readdir, rename, unlink, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { performance } from "node:perf_hooks";
-import { resolveCollisions } from "./decide.js";
+import { extensionDecision, resolveCollisions } from "./decide.js";
 import { decideForFile } from "./llm.js";
 import { scanFolder, type FileCard } from "./scan.js";
+import { categoriesFromRules, matchingNeverTouch, matchingOverride } from "./rules.js";
 import type { Rules } from "./rules.js";
 
 export interface PlanItem {
@@ -19,7 +20,7 @@ export interface PlanItem {
 
 export interface PlanFile { version: 1; root: string; model: string; createdAt: string; items: PlanItem[] }
 
-export interface CreatePlanOptions { limit?: number; rules?: Rules; out?: string; onProgress?: (index: number, total: number, name: string) => void }
+export interface CreatePlanOptions { limit?: number; rules?: Rules; allowRemote?: boolean; out?: string; onProgress?: (index: number, total: number, name: string) => void }
 
 function sameDestinationName(item: PlanItem): boolean {
   return item.to.replace(/\\/g, "/").split("/").at(-1)?.toLocaleLowerCase("en-US") === item.from.toLocaleLowerCase("en-US")
@@ -41,19 +42,70 @@ async function existingRelativePaths(root: string): Promise<string[]> {
 
 function isTemporary(name: string): boolean { return /\.(?:part|crdownload)$/i.test(name); }
 
-export async function createPlan(rootPath: string, options: CreatePlanOptions = {}): Promise<{ plan: PlanFile; elapsedMs: number; modelCalls: number; extensionOnlyDecisions: number; replacedExistingPlan: boolean; dateSources: Record<string, string> }> {
+function ruleSkipDecision(card: FileCard, pattern: string): Awaited<ReturnType<typeof decideForFile>> {
+  return { category: "Misc", description: "protected-file", documentDate: "unknown", reason: `matched never_touch rule: ${pattern}`,
+    confidence: 0, folder: ".", newName: card.name, dateSource: "none" };
+}
+
+function overrideDecision(card: FileCard, category: string, pattern: string): Awaited<ReturnType<typeof decideForFile>> {
+  const year = new Date(card.mtimeMs).toISOString().slice(0, 4);
+  const folder = ["Invoices", "Receipts"].includes(category) ? `${category}/${year}` : category;
+  return { category, description: "rule-override", documentDate: "unknown", reason: `matched override rule: ${pattern}`,
+    confidence: 0.95, folder, newName: card.name, dateSource: "file modified date" };
+}
+
+function timeoutDecision(card: FileCard): Awaited<ReturnType<typeof decideForFile>> {
+  return { category: "Misc", description: "model-timeout", documentDate: "unknown", reason: "model timeout",
+    confidence: 0, folder: ".", newName: card.name, dateSource: "none" };
+}
+
+function isModelTimeout(error: unknown): boolean {
+  return error instanceof Error && ["ModelTimeoutError", "TimeoutError", "AbortError"].includes(error.name);
+}
+
+export async function createPlan(rootPath: string, options: CreatePlanOptions = {}): Promise<{ plan: PlanFile; elapsedMs: number; modelCalls: number; overrideDecisions: number; extensionOnlyDecisions: number; neverTouchSkips: number; replacedExistingPlan: boolean; dateSources: Record<string, string> }> {
   const started = performance.now();
   const root = resolve(rootPath);
-  const cards = await scanFolder(root, { limit: options.limit });
+  const cards = await scanFolder(root, { limit: options.limit, exclude: ["rules.yaml"] });
   const existing = await existingRelativePaths(root);
-  const decisions = [] as Array<{ card: FileCard; decision: Awaited<ReturnType<typeof decideForFile>> }>;
+  const decisions = [] as Array<{ card: FileCard; decision: Awaited<ReturnType<typeof decideForFile>>; kind: "model" | "override" | "extension" | "never-touch" | "timeout" }>;
   let modelCalls = 0;
+  let overrideDecisions = 0;
+  let neverTouchSkips = 0;
+  const categories = categoriesFromRules(options.rules);
 
   for (let i = 0; i < cards.length; i += 1) {
     const card = cards[i]!;
     options.onProgress?.(i + 1, cards.length, card.name);
-    const decision = await decideForFile(card, options.rules, { onRequest: () => { modelCalls += 1; } });
-    decisions.push({ card, decision });
+    const protectedByRule = matchingNeverTouch(card.name, options.rules);
+    if (protectedByRule) {
+      decisions.push({ card, decision: ruleSkipDecision(card, protectedByRule), kind: "never-touch" });
+      neverTouchSkips += 1;
+      continue;
+    }
+    const override = matchingOverride(card.name, options.rules);
+    if (override) {
+      decisions.push({ card, decision: overrideDecision(card, override.category, override.match), kind: "override" });
+      overrideDecisions += 1;
+      continue;
+    }
+    if (!card.snippet?.trim()) {
+      decisions.push({ card, decision: extensionDecision(card, categories), kind: "extension" });
+      continue;
+    }
+    const decideOptions = { allowRemote: options.allowRemote, onRequest: () => { modelCalls += 1; } };
+    let decision: Awaited<ReturnType<typeof decideForFile>>;
+    try { decision = await decideForFile(card, options.rules, decideOptions); }
+    catch (error) {
+      if (!isModelTimeout(error)) throw error;
+      try { decision = await decideForFile(card, options.rules, decideOptions); }
+      catch (retryError) {
+        if (!isModelTimeout(retryError)) throw retryError;
+        decisions.push({ card, decision: timeoutDecision(card), kind: "timeout" });
+        continue;
+      }
+    }
+    decisions.push({ card, decision, kind: "model" });
   }
 
   const candidates = decisions.map(({ card, decision }) => {
@@ -114,13 +166,13 @@ export async function createPlan(rootPath: string, options: CreatePlanOptions = 
       throw error;
     }
   }
-  const extensionOnlyDecisions = decisions.filter(({ card }) => !card.snippet?.trim()).length;
+  const extensionOnlyDecisions = decisions.filter(({ kind }) => kind === "extension").length;
   const dateSources = Object.fromEntries(decisions.map(({ card, decision }) => [card.name, decision.dateSource]));
-  return { plan, elapsedMs: performance.now() - started, modelCalls, extensionOnlyDecisions, replacedExistingPlan, dateSources };
+  return { plan, elapsedMs: performance.now() - started, modelCalls, overrideDecisions, extensionOnlyDecisions, neverTouchSkips, replacedExistingPlan, dateSources };
 }
 
-export function printPlanSummary(items: PlanItem[], elapsedMs: number, modelCalls = 0, extensionOnlyDecisions = 0, dateSources: Record<string, string> = {}): void {
+export function printPlanSummary(items: PlanItem[], elapsedMs: number, modelCalls = 0, extensionOnlyDecisions = 0, dateSources: Record<string, string> = {}, overrideDecisions = 0, neverTouchSkips = 0): void {
   console.table(items.map((item) => ({ from: item.from, to: item.to, dateSource: dateSources[item.from] ?? "-", confidence: item.confidence, status: item.status })));
   const planned = items.filter((item) => item.status === "planned").length;
-  console.log(`Planned: ${planned}  Skipped: ${items.length - planned}  Model calls: ${modelCalls}  Extension-only decisions: ${extensionOnlyDecisions}  Total time: ${(elapsedMs / 1000).toFixed(1)}s`);
+  console.log(`Planned: ${planned}  Skipped: ${items.length - planned}  Model calls: ${modelCalls}  Overrides: ${overrideDecisions}  Extension-only decisions: ${extensionOnlyDecisions}  never_touch skips: ${neverTouchSkips}  Total time: ${(elapsedMs / 1000).toFixed(1)}s`);
 }

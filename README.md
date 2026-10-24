@@ -8,7 +8,7 @@
 - [x] Plan output
 - [x] Apply
 - [x] Undo
-- [ ] rules.yaml
+- [x] rules.yaml
 - [ ] Watch
 
 ## Why local and open

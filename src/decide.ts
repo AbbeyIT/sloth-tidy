@@ -56,10 +56,11 @@ export function cleanDescription(description: string): string {
     .replace(/-+/g, "-").replace(/^-|-$/g, "");
 }
 
-export function extensionDecision(card: FileCard): Decision {
-  const category = new Set(["jpg", "jpeg", "png", "gif", "webp", "heic"]).has(card.ext)
+export function extensionDecision(card: FileCard, allowedCategories: readonly string[] = DEFAULT_CATEGORIES): Decision {
+  const preferredCategory = new Set(["jpg", "jpeg", "png", "gif", "webp", "heic"]).has(card.ext)
     ? "Images"
     : new Set(["exe", "msi", "dmg", "pkg"]).has(card.ext) ? "Installers" : "Misc";
+  const category = allowedCategories.includes(preferredCategory) ? preferredCategory : allowedCategories.includes("Misc") ? "Misc" : allowedCategories[0] ?? "Misc";
   return {
     category, description: "unreadable-file", documentDate: "unknown",
     reason: "no readable content; filed by extension", confidence: 0.6,

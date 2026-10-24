@@ -1,0 +1,17 @@
+folders:
+  - Invoices
+  - Receipts
+  - Work
+  - School
+  - Installers
+  - Images
+  - Personal
+  - Misc
+naming: YYYY-MM-DD_description
+never_touch:
+  - "*.part"
+  - "*.crdownload"
+overrides:
+  - match: "worksheet*.docx"
+    category: School
+notes: "Keep school material together; preserve the original filename for rule-based placements."

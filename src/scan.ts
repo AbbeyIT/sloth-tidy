@@ -13,6 +13,7 @@ export interface FileCard {
 
 export interface ScanOptions {
   limit?: number;
+  exclude?: string[];
 }
 
 async function createCard(filePath: string, name: string, size: number, mtimeMs: number): Promise<FileCard> {
@@ -42,8 +43,9 @@ export async function scanFile(filePath: string): Promise<FileCard | undefined> 
 export async function scanFolder(root: string, opts: ScanOptions = {}): Promise<FileCard[]> {
   const absoluteRoot = resolve(root);
   const entries = await readdir(absoluteRoot, { withFileTypes: true });
+  const excluded = new Set((opts.exclude ?? []).map((name) => name.toLocaleLowerCase("en-US")));
   const files = entries
-    .filter((entry) => entry.isFile() && !entry.name.startsWith("."))
+    .filter((entry) => entry.isFile() && !entry.name.startsWith(".") && !excluded.has(entry.name.toLocaleLowerCase("en-US")))
     .sort((left, right) => left.name.localeCompare(right.name, "en"));
   const limitedFiles = opts.limit === undefined ? files : files.slice(0, Math.max(0, opts.limit));
 
