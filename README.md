@@ -5,9 +5,9 @@
 - [x] Scaffold
 - [x] Scan + extract
 - [x] Model decisions
-- [ ] Plan output
-- [ ] Apply
-- [ ] Undo
+- [x] Plan output
+- [x] Apply
+- [x] Undo
 - [ ] rules.yaml
 - [ ] Watch
 

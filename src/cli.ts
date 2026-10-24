@@ -2,9 +2,13 @@
 import { Command } from "commander";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { createInterface } from "node:readline/promises";
+import { stdin, stdout } from "node:process";
 import { decideForFile } from "./llm.js";
 import { scanFile, scanFolder } from "./scan.js";
 import { createPlan, printPlanSummary } from "./plan.js";
+import { applyPlan } from "./apply.js";
+import { undoLastBatch } from "./undo.js";
 
 export const program = new Command();
 
@@ -56,15 +60,22 @@ program
 program
   .command("apply <plan>")
   .option("--yes", "apply without an interactive confirmation")
-  .action((_plan: string) => {
-    console.log("not implemented yet");
+  .action(async (plan: string, options: { yes?: boolean }) => {
+    await applyPlan(plan, {
+      yes: options.yes,
+      confirm: async () => {
+        const prompt = createInterface({ input: stdin, output: stdout });
+        try { return (await prompt.question("Continue? [y/N] ")).trim().toLocaleLowerCase("en-US") === "y"; }
+        finally { prompt.close(); }
+      },
+    });
   });
 
 program
   .command("undo")
   .option("--log <file>", "undo log file", ".sloth-tidy/undo.log.json")
-  .action(() => {
-    console.log("not implemented yet");
+  .action(async (options: { log: string }) => {
+    await undoLastBatch(options.log);
   });
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
