@@ -19,7 +19,7 @@ export const Decision = z.object({
   confidence: z.number().min(0).max(1),
 });
 export type ModelDecision = z.infer<typeof Decision>;
-export interface Decision extends ModelDecision { folder: string; newName: string }
+export interface Decision extends ModelDecision { folder: string; newName: string; dateSource: "document" | "file modified date" | "none" }
 
 export function decisionSchemaFor(categories: readonly string[]) {
   const allowed = categories.length ? categories : [...DEFAULT_CATEGORIES];
@@ -44,6 +44,25 @@ export function decisionJsonSchema(categories: readonly string[]) {
 
 export function hasNonAsciiLetters(value: string): boolean {
   return Array.from(value).some((char) => (char.codePointAt(0) ?? 0) > 127 && /[\p{L}\p{M}]/u.test(char));
+}
+
+export function cleanDescription(description: string): string {
+  const months = "january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|jun|jul|aug|sep|sept|oct|nov|dec";
+  return description.toLowerCase()
+    .replace(new RegExp(`\\b(?:${months})\\b`, "gi"), "-")
+    .replace(/\b\d{4}(?:-\d{4})?\b/g, "-")
+    .replace(/-+/g, "-").replace(/^-|-$/g, "");
+}
+
+export function extensionDecision(card: FileCard): Decision {
+  const category = new Set(["jpg", "jpeg", "png", "gif", "webp", "heic"]).has(card.ext)
+    ? "Images"
+    : new Set(["exe", "msi", "dmg", "pkg"]).has(card.ext) ? "Installers" : "Misc";
+  return {
+    category, description: "unreadable-file", documentDate: "unknown",
+    reason: "no readable content; filed by extension", confidence: 0.6,
+    folder: category, newName: card.name, dateSource: "none",
+  };
 }
 
 /** Accept a model date only when that exact calendar date is visible in source data. */
@@ -75,11 +94,15 @@ export function hasVisibleDate(date: string, card: FileCard): boolean {
 /** Billing-period end date is preferred; other visible dates remain valid. */
 export function isPreferredDocumentDate(date: string, card: FileCard): boolean {
   if (date === "unknown") return true;
-  const [, monthText, yearText] = date.split("-");
+  const [, monthText] = date.split("-");
   const monthNames = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
   const month = monthNames[Number(monthText) - 1];
   const source = card.snippet ?? "";
-  if (month && yearText && /billing\s+period/i.test(source) && Number(monthText) === 10 && date === "2026-10-31") return true;
+  const rangePattern = /\b(\d{1,2})\s*[\u2013-]\s*(\d{1,2})\s+(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{4})\b/gi;
+  for (const match of source.matchAll(rangePattern)) {
+    if (/billing\s+period/i.test(source) && Number(match[2]) === Number(date.slice(8, 10))
+      && match[3]!.toLocaleLowerCase("en-US") === month!.toLocaleLowerCase("en-US") && match[4] === date.slice(0, 4)) return true;
+  }
   return !/\bdue\s+date\b|\bpayment\s+(?:deadline|due)\b/i.test(source);
 }
 
@@ -89,38 +112,41 @@ function mtimeDate(card: FileCard): string {
 
 /** Ignore all model-supplied paths and names; derive destinations from validated data. */
 export function buildDecision(model: ModelDecision, card: FileCard): Decision {
-  const safeDate = model.documentDate === "unknown" ? mtimeDate(card) : model.documentDate;
+  const description = cleanDescription(model.description) || "file-document";
+  const knownDate = model.documentDate !== "unknown";
+  const safeDate = knownDate ? model.documentDate : mtimeDate(card);
   const folder = ["Invoices", "Receipts"].includes(model.category) && model.documentDate !== "unknown"
     ? `${model.category}/${model.documentDate.slice(0, 4)}`
     : model.category;
   const extension = extname(card.name) || (card.ext ? `.${card.ext}` : "");
-  return { ...model, folder, newName: `${safeDate}_${model.description}${extension}` };
+  return { ...model, description, folder, newName: `${safeDate}_${description}${extension}`, dateSource: knownDate ? "document" : "file modified date" };
 }
 
 export function fallbackDecision(card: FileCard): Decision {
   return {
     category: "Misc", description: "unknown-file", documentDate: "unknown",
-    reason: "model output invalid", confidence: 0, folder: ".", newName: card.name,
+    reason: "model output invalid", confidence: 0, folder: ".", newName: card.name, dateSource: "none",
   };
 }
 
 /** Preserve the source name for low-confidence suggestions. */
 export function leaveInPlace(decision: Decision, card: FileCard): Decision {
-  return decision.confidence < 0.5 ? { ...decision, folder: ".", newName: card.name } : decision;
+  return decision.confidence < 0.5 ? { ...decision, folder: ".", newName: card.name, dateSource: "none" } : decision;
 }
 
 type CollisionTarget = Pick<Decision, "folder" | "newName">;
-export function resolveCollisions<T extends CollisionTarget>(items: T[]): T[] {
-  const usedTargets = new Set<string>();
+export function resolveCollisions<T extends CollisionTarget>(items: T[], occupiedTargets: string[] = []): T[] {
+  const usedTargets = new Set(occupiedTargets.map((target) => target.replace(/\\/g, "/").toLocaleLowerCase("en-US")));
+  const makeKey = (folder: string, name: string) => `${folder === "." ? "" : `${folder}/`}${name}`.toLocaleLowerCase("en-US");
   return items.map((item) => {
     const extension = extname(item.newName);
     const stem = extension ? item.newName.slice(0, -extension.length) : item.newName;
     let candidate = item.newName;
     let suffix = 2;
-    let key = `${item.folder}/${candidate}`.toLocaleLowerCase("en-US");
+    let key = makeKey(item.folder, candidate);
     while (usedTargets.has(key)) {
       candidate = `${stem} (${suffix})${extension}`;
-      key = `${item.folder}/${candidate}`.toLocaleLowerCase("en-US");
+      key = makeKey(item.folder, candidate);
       suffix += 1;
     }
     usedTargets.add(key);

@@ -1,4 +1,4 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, utimes, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import PDFDocument from "pdfkit";
 import { Document, Packer, Paragraph } from "docx";
@@ -333,7 +333,7 @@ function normalizeZipTimestamps(buffer: Buffer): void {
 
 await mkdir(target, { recursive: true });
 
-for (const name of fileNames) {
+for (const [index, name] of fileNames.entries()) {
   const extension = name.slice(name.lastIndexOf(".")).toLowerCase();
   const destination = join(target, name);
 
@@ -350,6 +350,10 @@ for (const name of fileNames) {
   } else {
     await writeFile(destination, Buffer.alloc(0));
   }
+  const month = 5 + Math.floor(index * 5 / fileNames.length);
+  const day = 1 + (index * 7) % 27;
+  const timestamp = new Date(Date.UTC(2026, month, day, 9 + index % 9, index % 60, 0));
+  await utimes(destination, timestamp, timestamp);
 }
 
 console.log(`Generated ${fileNames.length} deterministic demo files in ${target}`);

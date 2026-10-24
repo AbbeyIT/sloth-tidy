@@ -1,4 +1,4 @@
-import { buildDecision, decisionJsonSchema, decisionSchemaFor, fallbackDecision, hasNonAsciiLetters, hasVisibleDate, isPreferredDocumentDate, leaveInPlace } from "./decide.js";
+import { buildDecision, decisionJsonSchema, decisionSchemaFor, extensionDecision, fallbackDecision, hasNonAsciiLetters, hasVisibleDate, isPreferredDocumentDate, leaveInPlace } from "./decide.js";
 import type { Decision } from "./decide.js";
 import type { FileCard } from "./scan.js";
 import { categoriesFromRules } from "./rules.js";
@@ -106,6 +106,7 @@ function validationMessage(error: unknown): string {
 }
 
 export async function decideForFile(card: FileCard, rules?: Rules, options: DecideOptions = {}): Promise<Decision> {
+  if (card.snippet === undefined || card.snippet.trim() === "") return extensionDecision(card);
   const categories = categoriesFromRules(rules);
   const schema = decisionSchemaFor(categories);
   let validationError: string | undefined;

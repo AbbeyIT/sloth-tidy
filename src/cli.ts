@@ -4,6 +4,7 @@ import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { decideForFile } from "./llm.js";
 import { scanFile, scanFolder } from "./scan.js";
+import { createPlan, printPlanSummary } from "./plan.js";
 
 export const program = new Command();
 
@@ -40,10 +41,14 @@ program
 program
   .command("plan <folder>")
   .option("--out <file>", "plan output file", "plan.json")
-  .option("--rules <file>", "rules file")
   .option("--limit <number>", "maximum files to consider", (value) => Number.parseInt(value, 10))
-  .action((_folder: string) => {
-    console.log("not implemented yet");
+  .action(async (folder: string, options: { out: string; limit?: number }) => {
+    const { plan, elapsedMs } = await createPlan(folder, {
+      out: options.out,
+      limit: options.limit,
+      onProgress: (index, total, name) => console.log(`[${index}/${total}] ${name}`),
+    });
+    printPlanSummary(plan.items, elapsedMs);
   });
 
 program

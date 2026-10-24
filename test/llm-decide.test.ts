@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { hasVisibleDate, isPreferredDocumentDate, resolveCollisions } from "../src/decide.js";
+import { buildDecision, cleanDescription, extensionDecision, hasVisibleDate, isPreferredDocumentDate, resolveCollisions } from "../src/decide.js";
 import { decideForFile } from "../src/llm.js";
 import type { FileCard } from "../src/scan.js";
 
@@ -28,7 +28,7 @@ describe("decideForFile", () => {
     const result = await decideForFile(card, { folders: ["Invoices", "School"] });
     expect(result).toEqual({
       category: "Invoices", description: "meralco-electricity-bill", documentDate: "2026-10-03",
-      reason: "Meralco electricity bill", confidence: 0.94, folder: "Invoices/2026", newName: "2026-10-03_meralco-electricity-bill.pdf",
+      reason: "Meralco electricity bill", confidence: 0.94, folder: "Invoices/2026", newName: "2026-10-03_meralco-electricity-bill.pdf", dateSource: "document",
     });
     const request = JSON.parse(fetchMock.mock.calls[0]![1].body as string);
     expect(request.format.properties.category.enum).toEqual(["Invoices", "School"]);
@@ -124,5 +124,39 @@ describe("document date evidence", () => {
     await expect(decideForFile(billingCard)).resolves.toMatchObject({ documentDate: "2026-11-05" });
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("due date or payment deadline"));
     warn.mockRestore();
+  });
+});
+
+describe("decision polish", () => {
+  it("removes month names and years from descriptions before naming", () => {
+    expect(cleanDescription("october-2026-school-notes-2026-2027-final")).toBe("school-notes-final");
+    expect(cleanDescription("sep-2027-client-update")).toBe("client-update");
+    const decision = buildDecision({ category: "School", description: "october-2026-school-notes", documentDate: "unknown", reason: "School notes", confidence: 0.9 }, card);
+    expect(decision.newName).toBe("2026-10-20_school-notes.pdf");
+  });
+
+  it.each([
+    ["photo.jpg", "jpg", "Images"], ["photo.jpeg", "jpeg", "Images"], ["photo.png", "png", "Images"],
+    ["photo.gif", "gif", "Images"], ["photo.webp", "webp", "Images"], ["photo.heic", "heic", "Images"],
+    ["setup.exe", "exe", "Installers"], ["setup.msi", "msi", "Installers"], ["setup.dmg", "dmg", "Installers"], ["setup.pkg", "pkg", "Installers"],
+    ["archive.zip", "zip", "Misc"],
+  ])("files without snippets use the extension category and original name", (name, ext, category) => {
+    const noContent = { ...card, name, ext, snippet: undefined };
+    const decision = extensionDecision(noContent);
+    expect(decision).toMatchObject({ category, newName: name, reason: "no readable content; filed by extension", confidence: 0.6, dateSource: "none" });
+  });
+
+  it("does not call Ollama for files without readable content", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(decideForFile({ ...card, name: "setup.exe", ext: "exe", snippet: undefined })).resolves.toMatchObject({ category: "Installers", newName: "setup.exe" });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("uses the no-content path for an empty snippet", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(decideForFile({ ...card, name: "empty.txt", ext: "txt", snippet: "  " })).resolves.toMatchObject({ category: "Misc", newName: "empty.txt", dateSource: "none" });
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });
