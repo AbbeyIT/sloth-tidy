@@ -11,6 +11,7 @@ Sloth Tidy sends readable file snippets to Ollama on your machine by default. Af
 - Node.js 20 or newer
 - Ollama installed and running
 - A pulled model; the default is `qwen2.5:7b`
+- Model weights are not included and are subject to their own licenses.
 
 ```sh
 ollama pull qwen2.5:7b
@@ -25,6 +26,7 @@ Generate the 30-file demo, copy it, and plan against the copy. The plan is writt
 
 ```powershell
 npx tsx scripts/make-messy-folder.ts
+if (Test-Path demo/messy-run) { Move-Item demo/messy-run ("demo/messy-run-backup-" + [guid]::NewGuid().ToString("N")) }
 Copy-Item demo/messy demo/messy-run -Recurse
 npx tsx src/cli.ts plan demo/messy-run --out demo/messy-run-plan.json
 npx tsx src/cli.ts apply demo/messy-run-plan.json --yes
@@ -56,16 +58,16 @@ On a fresh verification copy, apply moved 29 files, skipped one, and undo restor
 
 ## Commands reference
 
-Run source commands with `npx tsx src/cli.ts` during development, or use the installed `sloth-tidy` executable after building.
+Run the source CLI with `npx tsx src/cli.ts` during development.
 
 | Command | Purpose and flags |
 | --- | --- |
-| `sloth-tidy plan <folder> [--out <file>] [--rules <file>] [--limit <number>] [--allow-remote]` | Read files and write a dry-run plan. `--out` defaults to `plan.json`; `--rules` defaults to `<folder>/rules.yaml` when present; `--limit` handles the first N files. |
-| `sloth-tidy apply <plan.json> [--yes]` | Apply planned moves. Without `--yes`, asks for confirmation. |
-| `sloth-tidy undo [--log <file>]` | Reverse the newest eligible batch. The log defaults to `.sloth-tidy/undo.log.json` relative to the current directory. |
-| `sloth-tidy watch <folder> [--rules <file>] [--apply] [--quiet-ms <milliseconds>] [--interval-ms <milliseconds>] [--min-confidence <number>] [--max-batch <number>] [--allow-remote]` | Poll for new, stable top-level files. Defaults: 30,000 ms quiet period, 10,000 ms poll interval, 0.8 confidence threshold, and 20 moves per cycle. Without `--apply`, appends proposals to `.sloth-tidy/pending-plan.json`. |
-| `sloth-tidy scan <folder>` | Hidden verification command. Prints top-level file cards and short snippets. |
-| `sloth-tidy decide <file> [--allow-remote]` | Hidden verification command. Prints one file decision. |
+| `npx tsx src/cli.ts plan <folder> [--out <file>] [--rules <file>] [--limit <number>] [--allow-remote]` | Read files and write a dry-run plan. `--out` defaults to `plan.json`; `--rules` defaults to `<folder>/rules.yaml` when present; `--limit` handles the first N files. |
+| `npx tsx src/cli.ts apply <plan.json> [--yes]` | Apply planned moves. Without `--yes`, asks for confirmation. |
+| `npx tsx src/cli.ts undo [--log <file>]` | Reverse the newest eligible batch. The log defaults to `.sloth-tidy/undo.log.json` relative to the current directory. |
+| `npx tsx src/cli.ts watch <folder> [--rules <file>] [--apply] [--quiet-ms <milliseconds>] [--interval-ms <milliseconds>] [--min-confidence <number>] [--max-batch <number>] [--allow-remote]` | Poll for new, stable top-level files. Defaults: 30,000 ms quiet period, 10,000 ms poll interval, 0.8 confidence threshold, and 20 moves per cycle. Without `--apply`, appends proposals to `.sloth-tidy/pending-plan.json`. |
+| `npx tsx src/cli.ts scan <folder>` | Hidden verification command. Prints top-level file cards and short snippets. |
+| `npx tsx src/cli.ts decide <file> [--allow-remote]` | Hidden verification command. Prints one file decision. |
 
 ## How decisions work
 
@@ -94,10 +96,25 @@ never_touch:
 overrides:
   - match: "worksheet*.docx"
     category: School
+  - match: "Screenshot*.png"
+    category: Images
 notes: "Keep school material together; preserve the original filename for rule-based placements."
 ```
 
 `folders` replaces the model's allowed category list. `naming` supports the `YYYY-MM-DD_description` style. `never_touch` contains glob patterns to skip. Matching `overrides` choose a category before a model call. `notes` adds up to 500 characters of prompt guidance.
+
+## Watch mode
+
+Copy the demo folder, start the watcher, then drop new files into the copy. It waits for each file to stop changing, then proposes a destination. With `--apply` it also moves files at or above `--min-confidence`. Press Ctrl+C to stop, and run `undo` to reverse what it moved.
+
+```powershell
+Copy-Item demo/messy demo/watch-demo -Recurse
+npx tsx src/cli.ts watch demo/watch-demo --rules rules.example.yaml --apply --quiet-ms 3000 --interval-ms 2000
+```
+
+Leave out `--apply` to get proposals only, written to `.sloth-tidy/pending-plan.json`.
+
+Files without readable content receive confidence 0.6, so the default `--min-confidence 0.8` will not auto-file them. Add an override to file a known image by extension and name, such as `Screenshot*.png` to `Images` in `rules.example.yaml`.
 
 ## Safety guarantees
 
@@ -105,6 +122,7 @@ notes: "Keep school material together; preserve the original filename for rule-b
 - Apply checks that every destination stays inside the plan root, that sources still match their planned size and modified time, and that destinations do not exist (case-insensitive check). It never overwrites or deletes files.
 - Watch moves files only with `--apply` and only at or above `--min-confidence`, up to `--max-batch` per cycle.
 - Every applied batch is recorded in `.sloth-tidy/undo.log.json`. Undo reverses the most recent batch; it skips a move if the destination is missing or the original path is occupied.
+- `plan.json` and `watch.log` contain file names, but never file contents.
 - File names and contents are treated as untrusted data, never as instructions. Snippets are not written to plans or logs.
 
 ## Configuration
@@ -115,7 +133,9 @@ notes: "Keep school material together; preserve the original filename for rule-b
 
 ## Measured results
 
-A prior full run on the 30-file demo with `qwen2.5:7b` made 22 model calls and 10 extension-only decisions, taking about 8-9 minutes. A fresh full run for this README verification made 20 model calls and 10 extension-only decisions in 425.2 seconds (about 7.1 minutes). Timings and model classifications can vary. Other model and platform performance: not measured.
+Across our 30-file demo runs, planning took about 425 to 570 seconds (7 to 10 minutes). A prior run made 22 model calls and 10 extension-only decisions; a fresh verification run made 20 model calls and 10 extension-only decisions. Timings and model classifications can vary.
+
+Hardware: AMD Ryzen 5 5500U with Radeon Graphics
 
 ## Known limitations
 
@@ -159,4 +179,4 @@ test/
     tiny.docx
 ```
 
-License: TBD
+License: [MIT](LICENSE.md)

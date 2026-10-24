@@ -10,9 +10,13 @@ afterEach(async () => { if (temporary) await rm(temporary, { recursive: true, fo
 describe("rules.yaml", () => {
   it("loads and validates the sample demo rules", async () => {
     const rules = await loadRulesFile("rules.example.yaml");
-    expect(rules.overrides).toEqual([{ match: "worksheet*.docx", category: "School" }]);
+    expect(rules.overrides).toEqual([
+      { match: "worksheet*.docx", category: "School" },
+      { match: "Screenshot*.png", category: "Images" },
+    ]);
     expect(categoriesFromRules(rules)).toContain("Personal");
     expect(matchingOverride("worksheet_fractions.docx", rules)?.category).toBe("School");
+    expect(matchingOverride("Screenshot 2026-10-03.png", rules)?.category).toBe("Images");
     expect(matchingNeverTouch("download.part", rules)).toBe("*.part");
   });
 

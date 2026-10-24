@@ -14,4 +14,6 @@ never_touch:
 overrides:
   - match: "worksheet*.docx"
     category: School
+  - match: "Screenshot*.png"
+    category: Images
 notes: "Keep school material together; preserve the original filename for rule-based placements."
