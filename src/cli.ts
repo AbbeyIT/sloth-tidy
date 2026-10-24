@@ -44,13 +44,13 @@ program
   .option("--out <file>", "plan output file", "plan.json")
   .option("--limit <number>", "maximum files to consider", (value) => Number.parseInt(value, 10))
   .action(async (folder: string, options: { out: string; limit?: number }) => {
-    const { plan, elapsedMs, modelCalls, extensionOnlyDecisions, replacedExistingPlan } = await createPlan(folder, {
+    const { plan, elapsedMs, modelCalls, extensionOnlyDecisions, replacedExistingPlan, dateSources } = await createPlan(folder, {
       out: options.out,
       limit: options.limit,
       onProgress: (index, total, name) => console.log(`[${index}/${total}] ${name}`),
     });
     if (replacedExistingPlan) console.log("replacing previous plan");
-    printPlanSummary(plan.items, elapsedMs, modelCalls, extensionOnlyDecisions);
+    printPlanSummary(plan.items, elapsedMs, modelCalls, extensionOnlyDecisions, dateSources);
   });
 
 program

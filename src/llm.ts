@@ -1,8 +1,9 @@
-import { buildDecision, decisionJsonSchema, decisionSchemaFor, extensionDecision, fallbackDecision, hasNonAsciiLetters, hasVisibleDate, isPreferredDocumentDate, leaveInPlace } from "./decide.js";
+import { buildDecision, cleanDescription, decisionJsonSchema, decisionSchemaFor, extensionDecision, fallbackDecision, hasNonAsciiLetters, hasVisibleDate, isPreferredDocumentDate, leaveInPlace } from "./decide.js";
 import type { Decision } from "./decide.js";
 import type { FileCard } from "./scan.js";
 import { categoriesFromRules } from "./rules.js";
 import type { Rules } from "./rules.js";
+import { ZodError } from "zod";
 
 const DEFAULT_OLLAMA_URL = "http://localhost:11434";
 const DEFAULT_MODEL = "qwen2.5:7b";
@@ -43,12 +44,15 @@ function buildSystemPrompt(rules: Rules | undefined, categories: string[]): stri
     "Return JSON only, matching the requested schema exactly.",
     "Choose category only from the supplied enum.",
     "description must be 2-6 lowercase English words using letters, numbers, and hyphens only.",
-    "Use Invoices and Receipts only for vendor documents showing an amount charged or paid.",
+    "Invoices: a vendor bill or statement asking for payment, typically with a due date, amount due, account number, or statement of account.",
+    "Receipts: proof that payment was already made, such as a point-of-sale receipt, an itemized purchase, or text stating paid.",
     "documentDate must be the statement or issue date. For bills with a billing period, use the last day of the period. Never use a due date or payment deadline.",
     "Use YYYY-MM-DD only for a date visible in the content; otherwise use unknown.",
     "reason must be short English text.",
     "Examples:",
     '{"category":"Invoices","description":"meralco-electricity-bill","documentDate":"2026-10-03","reason":"Electricity bill from Meralco","confidence":0.95}',
+    '{"category":"Receipts","description":"freshmart-grocery-receipt","documentDate":"2026-09-18","reason":"Itemized grocery purchase paid at point of sale","confidence":0.96}',
+    '{"category":"Invoices","description":"meralco-electricity-statement","documentDate":"2026-10-31","reason":"Electricity statement asks for payment by a due date","confidence":0.96}',
     '{"category":"Work","description":"cover-letter-marketing-role","documentDate":"unknown","reason":"Job application cover letter","confidence":0.91}',
     '{"category":"Personal","description":"monthly-household-budget","documentDate":"unknown","reason":"Personal budget note with household expenses","confidence":0.9}',
     '{"category":"Installers","description":"vscode-windows-installer","documentDate":"unknown","reason":"Visual Studio Code installer","confidence":0.99}',
@@ -104,6 +108,13 @@ async function requestModel(card: FileCard, rules: Rules | undefined, categories
 
 function validationMessage(error: unknown): string {
   if (error instanceof SyntaxError) return "response was not valid JSON";
+  if (error instanceof ZodError) {
+    const field = String(error.issues[0]?.path[0] ?? "response");
+    if (field === "category") return "category not in allowed enum";
+    if (field === "description") return "description failed schema validation";
+    if (field === "documentDate") return "documentDate failed schema validation";
+    return `${field} failed schema validation`;
+  }
   if (error instanceof Error) return error.message;
   return "response did not match the Decision schema";
 }
@@ -118,6 +129,7 @@ export async function decideForFile(card: FileCard, rules?: Rules, options: Deci
     try {
       const parsed = schema.parse(JSON.parse(content) as unknown);
       if (hasNonAsciiLetters(parsed.reason) || hasNonAsciiLetters(parsed.description)) throw new Error("reason and description must contain English text only");
+      if (!cleanDescription(parsed.description)) throw new Error("description empty after cleanup");
       if (!hasVisibleDate(parsed.documentDate, card)) throw new Error("documentDate is not visible in the filename or extracted content; use unknown");
       if (parsed.documentDate !== "unknown" && /\bdue\s+date\b|\bpayment\s+(?:deadline|due)\b/i.test(card.snippet ?? "")) {
         const preferred = isPreferredDocumentDate(parsed.documentDate, card);
@@ -126,5 +138,5 @@ export async function decideForFile(card: FileCard, rules?: Rules, options: Deci
       return leaveInPlace(buildDecision(parsed, card), card);
     } catch (error) { validationError = validationMessage(error); }
   }
-  return fallbackDecision(card);
+  return fallbackDecision(card, validationError ?? "response did not match the Decision schema");
 }

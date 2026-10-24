@@ -41,7 +41,7 @@ async function existingRelativePaths(root: string): Promise<string[]> {
 
 function isTemporary(name: string): boolean { return /\.(?:part|crdownload)$/i.test(name); }
 
-export async function createPlan(rootPath: string, options: CreatePlanOptions = {}): Promise<{ plan: PlanFile; elapsedMs: number; modelCalls: number; extensionOnlyDecisions: number; replacedExistingPlan: boolean }> {
+export async function createPlan(rootPath: string, options: CreatePlanOptions = {}): Promise<{ plan: PlanFile; elapsedMs: number; modelCalls: number; extensionOnlyDecisions: number; replacedExistingPlan: boolean; dateSources: Record<string, string> }> {
   const started = performance.now();
   const root = resolve(rootPath);
   const cards = await scanFolder(root, { limit: options.limit });
@@ -115,11 +115,12 @@ export async function createPlan(rootPath: string, options: CreatePlanOptions = 
     }
   }
   const extensionOnlyDecisions = decisions.filter(({ card }) => !card.snippet?.trim()).length;
-  return { plan, elapsedMs: performance.now() - started, modelCalls, extensionOnlyDecisions, replacedExistingPlan };
+  const dateSources = Object.fromEntries(decisions.map(({ card, decision }) => [card.name, decision.dateSource]));
+  return { plan, elapsedMs: performance.now() - started, modelCalls, extensionOnlyDecisions, replacedExistingPlan, dateSources };
 }
 
-export function printPlanSummary(items: PlanItem[], elapsedMs: number, modelCalls = 0, extensionOnlyDecisions = 0): void {
-  console.table(items.map((item) => ({ from: item.from, to: item.to, confidence: item.confidence, status: item.status })));
+export function printPlanSummary(items: PlanItem[], elapsedMs: number, modelCalls = 0, extensionOnlyDecisions = 0, dateSources: Record<string, string> = {}): void {
+  console.table(items.map((item) => ({ from: item.from, to: item.to, dateSource: dateSources[item.from] ?? "-", confidence: item.confidence, status: item.status })));
   const planned = items.filter((item) => item.status === "planned").length;
   console.log(`Planned: ${planned}  Skipped: ${items.length - planned}  Model calls: ${modelCalls}  Extension-only decisions: ${extensionOnlyDecisions}  Total time: ${(elapsedMs / 1000).toFixed(1)}s`);
 }

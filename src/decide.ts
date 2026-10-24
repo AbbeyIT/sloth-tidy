@@ -124,10 +124,10 @@ export function buildDecision(model: ModelDecision, card: FileCard): Decision {
   return { ...model, description, folder, newName: `${safeDate}_${description}${extension}`, dateSource: knownDate ? "document" : "file modified date" };
 }
 
-export function fallbackDecision(card: FileCard): Decision {
+export function fallbackDecision(card: FileCard, failureReason = "model output invalid"): Decision {
   return {
     category: "Misc", description: "unknown-file", documentDate: "unknown",
-    reason: "model output invalid", confidence: 0, folder: ".", newName: card.name, dateSource: "none",
+    reason: `model output invalid: ${failureReason}`.slice(0, 200), confidence: 0, folder: ".", newName: card.name, dateSource: "none",
   };
 }
 

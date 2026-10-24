@@ -36,7 +36,10 @@ describe("decideForFile", () => {
     expect(request.messages[0].content).toContain("Write all text in English only");
     expect(request.messages[0].content).toContain("vscode-windows-installer");
     expect(request.messages[0].content).toContain("monthly-household-budget");
-    expect(request.messages[0].content).toContain("vendor documents showing an amount charged or paid");
+    expect(request.messages[0].content).toContain("Invoices: a vendor bill or statement asking for payment");
+    expect(request.messages[0].content).toContain("Receipts: proof that payment was already made");
+    expect(request.messages[0].content).toContain("freshmart-grocery-receipt");
+    expect(request.messages[0].content).toContain("meralco-electricity-statement");
     expect(request.messages[1].content).toContain("modified date");
   });
 
@@ -51,7 +54,15 @@ describe("decideForFile", () => {
     const result = await decideForFile(card);
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(JSON.parse(fetchMock.mock.calls[1]![1].body as string).messages[1].content).toContain("previous response failed validation");
-    expect(result).toMatchObject({ newName: card.name, folder: ".", reason: "model output invalid", confidence: 0 });
+    expect(result).toMatchObject({ newName: card.name, folder: ".", reason: expect.stringContaining("model output invalid:"), confidence: 0 });
+  });
+
+  it("reports when the description becomes empty after date cleanup", async () => {
+    const invalid = answer({ description: "2026-10" });
+    const fetchMock = mockOllamaContent(invalid, invalid);
+    const result = await decideForFile(card);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(result.reason).toBe("model output invalid: description empty after cleanup");
   });
 
   it("ignores model paths and always preserves the original extension", async () => {
@@ -126,6 +137,28 @@ describe("document date evidence", () => {
     await expect(decideForFile(billingCard)).resolves.toMatchObject({ documentDate: "2026-11-05" });
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("due date or payment deadline"));
     warn.mockRestore();
+  });
+});
+
+describe("invoice and receipt classification", () => {
+  it("classifies a paid grocery point-of-sale receipt as Receipts and enforces the category enum", async () => {
+    const grocery = {
+      ...card, name: "receipt_grocery_2026-09.txt", ext: "txt",
+      snippet: "FRESHMART | 2026-09-18 | Bananas PHP 96.00 | TOTAL PHP 96.00 paid by card",
+    };
+    const fetchMock = mockOllamaContent(JSON.stringify({ category: "Receipts", description: "freshmart-grocery-receipt", documentDate: "2026-09-18", reason: "Paid grocery purchase at point of sale", confidence: 0.96 }));
+    const decision = await decideForFile(grocery);
+    expect(decision).toMatchObject({ category: "Receipts", folder: "Receipts/2026" });
+    const request = JSON.parse(fetchMock.mock.calls[0]![1].body as string);
+    expect(request.format.properties.category.enum).toEqual([...DEFAULT_CATEGORIES]);
+  });
+
+  it("classifies an electricity statement with a due date as Invoices", async () => {
+    const bill = {
+      ...card, snippet: "MERALCO statement of account. Billing period: 01–31 October 2026. Amount due PHP 2,176.44. Due date: 05 November 2026.",
+    };
+    mockOllamaContent(JSON.stringify({ category: "Invoices", description: "meralco-electricity-statement", documentDate: "2026-10-31", reason: "Statement asks for payment by due date", confidence: 0.96 }));
+    await expect(decideForFile(bill)).resolves.toMatchObject({ category: "Invoices", folder: "Invoices/2026", dateSource: "document" });
   });
 });
 

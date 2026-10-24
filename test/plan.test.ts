@@ -64,6 +64,13 @@ describe("createPlan", () => {
     expect(plan.items.map((item) => item.to)).toEqual(["-", "-", "-"]);
   });
 
+  it("preserves detailed decision failure reasons on skipped plan items", async () => {
+    const root = await makeFolder(["bad-model.txt"]);
+    decideMock.mockResolvedValue({ ...suggestion("bad-model.txt", ".", 0), reason: "model output invalid: description empty after cleanup", dateSource: "none" });
+    const { plan } = await createPlan(root);
+    expect(plan.items[0]).toMatchObject({ to: "-", status: "skipped", reason: "model output invalid: description empty after cleanup" });
+  });
+
   it("leaves the source folder byte-for-byte unchanged", async () => {
     const root = await makeFolder(["one.txt", "two.txt"]);
     decideMock.mockResolvedValue(suggestion("renamed.txt"));
